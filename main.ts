@@ -18,16 +18,20 @@ const BPS = 10000n;
 const MIN_NOTIONAL = 1000000n; // 1 USDC in quote units
 const MAX_SLIPPAGE_BPS = 150;
 
-// Tunable parameters (v1 defaults).
-const DIP_BPS = 90n; // entry: close >= 0.9% below SMA-60
-const RSI_ENTRY = 3500n; // entry: RSI(14) < 35 (scaled x100)
+// Tunable parameters (v2, tuned on the dev window by local grading).
+// v1 (dip 0.9%, 50% size, TP +0.8%, SMA-20 exit) lost -$6.40: it caught
+// falling knives and its SMA-20 exit sold the first tick up, before the real
+// bounce. v2 waits for a deeper dip, sizes 100%, drops the SMA-20 exit, and
+// lets a 0.5% trailing stop ride the rebound instead of capping it at +0.8%.
+const DIP_BPS = 130n; // entry: close >= 1.3% below SMA-60
+const RSI_ENTRY = 4000n; // entry: RSI(14) < 40 (scaled x100)
 const BOUNCE_BPS = 30n; // bounce: close >= 0.3% above the 30-bar low
-const SIZE_BPS = 5000n; // buy 50% of equity
-const TP_BPS = 80n; // take-profit +0.8% above entry
-const SL_BPS = 120n; // stop-loss -1.2% below entry
-const TIME_STOP_BARS = 180;
+const SIZE_BPS = 10000n; // buy 100% of equity
+const TP_BPS = 400n; // take-profit +4.0% above entry
+const SL_BPS = 300n; // stop-loss -3.0% below entry
+const TIME_STOP_BARS = 300;
 const TRAIL_ARM_BPS = 50n; // trailing arms once up >= 0.5%
-const TRAIL_DROP_BPS = 40n; // trailing exit: close 0.4% below peak
+const TRAIL_DROP_BPS = 50n; // trailing exit: close 0.5% below peak
 
 const closes: bigint[] = [];
 let entryPrice: bigint | null = null;
@@ -100,8 +104,9 @@ await runBars({
     if (state.warmingUp) return [];
 
     // ---- EXIT: sell the entire position when any exit fires. ----
+    // No SMA-20 exit: v1 showed it sells the first tick up, before the
+    // rebound has run. The trailing stop is the exit that rides a bounce.
     if (qty > 0n && entryPrice !== null) {
-      const sma20 = sma(20);
       const barsHeld = state.seq - entrySeq;
       const tp = (entryPrice * (BPS + TP_BPS)) / BPS;
       const sl = (entryPrice * (BPS - SL_BPS)) / BPS;
@@ -109,7 +114,6 @@ await runBars({
       if (close >= tp) exit = true; // take-profit
       else if (close <= sl) exit = true; // stop-loss
       else if (barsHeld >= TIME_STOP_BARS) exit = true; // time stop
-      else if (sma20 !== null && close > sma20) exit = true; // back above SMA-20
       else if (
         peakSinceEntry !== null &&
         peakSinceEntry >= (entryPrice * (BPS + TRAIL_ARM_BPS)) / BPS &&
